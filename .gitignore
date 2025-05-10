@@ -1,0 +1,21 @@
+# PyInstaller output
+*.exe
+*.pkg
+*.spec
+dist/
+build/
+
+# Python cache
+__pycache__/
+*.py[cod]
+
+# Jupyter notebook checkpoints
+.ipynb_checkpoints/
+
+# Logs
+*.log
+
+# System/IDE files
+.DS_Store
+.vscode/
+.idea/
