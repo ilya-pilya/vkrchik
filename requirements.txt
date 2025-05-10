@@ -1,0 +1,15 @@
+PyPDF2
+deep-translator
+fitz
+flask
+joblib
+matplotlib
+nltk
+numpy
+pandas
+python-docx
+scikit-learn
+seaborn
+tensorflow
+tensorflow_addons
+werkzeug

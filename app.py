@@ -1,12 +1,12 @@
 import os, re
 import numpy as np
 import fitz, joblib
+import sys 
 from tempfile import NamedTemporaryFile
 from docx import Document
 from deep_translator import GoogleTranslator
 from flask import Flask, render_template, request, jsonify
 from werkzeug.utils import secure_filename
-from deep_translator import GoogleTranslator
 from tensorflow.keras.models import load_model
 from nltk.tokenize import WordPunctTokenizer
 from nltk.corpus import stopwords
@@ -24,10 +24,32 @@ LABEL_TO_ISO = {
     'es': 'es'
 }
 
-tfidf     = joblib.load('tfidf_vectorizer.joblib')
-svd       = joblib.load('svd_transformer.joblib')
-y_encoder = joblib.load('label_encoder.joblib')
-model     = load_model('keras_lang_model.h5')
+if getattr(sys, 'frozen', False):
+    BASE_DIR = os.path.dirname(sys.executable)
+else:
+    BASE_DIR = os.path.dirname(os.path.abspath(__file__))
+
+MODEL_DIR = os.path.join(BASE_DIR, 'models')
+
+required_files = [
+    'tfidf_vectorizer.joblib',
+    'svd_transformer.joblib',
+    'label_encoder.joblib',
+    'keras_lang_model.h5'
+]
+
+missing = [f for f in required_files if not os.path.exists(os.path.join(MODEL_DIR, f))]
+
+if missing:
+    raise FileNotFoundError(
+        f"Отсутствуют необходимые файлы в папке models/: {', '.join(missing)}.\n"
+        f"Убедитесь, что папка 'models' находится рядом с main.exe и содержит все нужные модели." 
+    )
+
+tfidf = joblib.load(os.path.join(MODEL_DIR, 'tfidf_vectorizer.joblib'))
+svd = joblib.load(os.path.join(MODEL_DIR, 'svd_transformer.joblib'))
+y_encoder = joblib.load(os.path.join(MODEL_DIR, 'label_encoder.joblib'))
+model = load_model(os.path.join(MODEL_DIR, 'keras_lang_model.h5'))
 
 tokenizer = WordPunctTokenizer()
 
