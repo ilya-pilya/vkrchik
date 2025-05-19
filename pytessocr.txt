@@ -1,0 +1,19 @@
+# 1) Установить движок Tesseract и нужные языковые пакеты
+!apt-get update -qq && \
+ !apt-get install -y -qq \
+  tesseract-ocr \
+  tesseract-ocr-rus \
+  tesseract-ocr-tur \
+  tesseract-ocr-eng \
+  tesseract-ocr-fra \
+  tesseract-ocr-spa \
+  tesseract-ocr-deu \
+  tesseract-ocr-ell \
+  tesseract-ocr-por \
+  tesseract-ocr-ita
+
+# 2) Установить Python-библиотеку
+!pip install -q pytesseract pillow
+
+# 3) Проверить
+!tesseract --version

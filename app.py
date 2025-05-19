@@ -1,20 +1,23 @@
-import os, re
+import os, re, fitz, joblib
 import numpy as np
-import fitz, joblib
 import sys 
+import pytesseract
 from langdetect import detect, DetectorFactory
 from tempfile import NamedTemporaryFile
 from docx import Document
 from deep_translator import GoogleTranslator
 from flask import Flask, render_template, request, jsonify, redirect, url_for, flash
+from flask_ngrok import run_with_ngrok
+from pyngrok import ngrok
 from werkzeug.utils import secure_filename
 from tensorflow.keras.models import load_model
 from nltk.tokenize import WordPunctTokenizer
 from nltk.corpus import stopwords
 from nltk.stem import SnowballStemmer
+from PIL import Image
+from pytesseract import TesseractNotFoundError
 
-app = Flask(__name__)
-app.secret_key = 'change_this_to_something_secret'
+pytesseract.pytesseract.tesseract_cmd = '/usr/bin/tesseract'
 
 DetectorFactory.seed = 0
 LABEL_TO_ISO = {
@@ -29,7 +32,7 @@ LABEL_TO_ISO = {
     'es': 'es'
 }
 
-MODEL_DIR = os.path.join(os.path.dirname(__file__), 'models')
+MODEL_DIR = '/content/drive/MyDrive/CL/preddiplomka/models'
 KERAS_MODEL_PATH = os.path.join(MODEL_DIR, 'keras_lang_model.h5')
 TFIDF_PATH        = os.path.join(MODEL_DIR, 'tfidf_vectorizer.joblib')
 SVD_PATH          = os.path.join(MODEL_DIR, 'svd_transformer.joblib')
@@ -57,6 +60,10 @@ y_encoder   = joblib.load(ENCODER_PATH)
 
 tokenizer = WordPunctTokenizer()
 
+app = Flask(__name__)
+app.secret_key = 'super_secret'
+
+run_with_ngrok(app)
 LANG_MAP_NLTK = {
     'ru':'russian', 'de':'german',
     'tr':'turkish', 'el':'greek',
@@ -93,6 +100,13 @@ def extract_text_from_file(file_path: str) -> str:
         return "\n".join(p.text for p in doc.paragraphs)
     else:
         raise ValueError(f"Формат файла {ext} не поддерживается.")
+
+def extract_text_from_image(path: str) -> str:
+    try:
+        img = Image.open(path)
+        return pytesseract.image_to_string(img, lang='rus+deu+eng+tur+ell+fre+spa+por+ita')
+    except TesseractNotFoundError:
+        return ""
 
 def process_large_file(file_path, chunk_size=10000):
     language_votes = {}
@@ -204,114 +218,75 @@ def upload_model():
 @app.route('/process', methods=['POST'])
 def process_file():
     # Инициализируем
-    summary = None
-    translations = ''
     tmp_name = None
-    text = None
-    
-    # Если пользователь вставил текст вручную
-    text_input = request.form.get('text_input', '').strip()
-    if text_input:
-        # При очень большом тексте - временный файл + process_large_file
-        if len(text_input) > 500_000:
-            tmp = NamedTemporaryFile(delete=False, suffix='.txt')
-            tmp_name = tmp.name
-            tmp.write(text_input.encode('utf-8'))
-            tmp.close()
-            summary = process_large_file(tmp_name, chunk_size=50_000)
-        else:
+    try:
+        # Если пользователь вставил текст вручную
+        text_input = request.form.get('text_input', '').strip()
+        if text_input:
             text = text_input
-
-    else:
-        # Иначе пытаемся загрузить файл
-        f = request.files.get('file')
-        if not f:
-            return render_template(
-                'index.html',
-                supported_langs=SUPPORTED_LANGS,
-                summary=summary,
-                translations="Ошибка: ни текст, ни файл не переданы"
-            ), 400
-
-        suffix = os.path.splitext(secure_filename(f.filename))[1].lower()
-        tmp = NamedTemporaryFile(delete=False, suffix=suffix)
-        tmp_name = tmp.name
-        tmp.close()
-        f.save(tmp_name)
-
-        # Если это большой .txt - chunk-процессинг
-        if suffix == '.txt' and os.path.getsize(tmp_name) > 5_000_000:
-            summary = process_large_file(tmp_name, chunk_size=50_000)
         else:
-            # Обычное извлечение текста
-            try:
+            f = request.files.get('file')
+            if not f:
+                return render_template('index.html', supported_langs=SUPPORTED_LANGS,
+                                       summary=None,
+                                       translations="Ошибка: ни текст, ни файл не переданы"), 400
+            suffix = os.path.splitext(secure_filename(f.filename))[1].lower()
+            tmp = NamedTemporaryFile(delete=False, suffix=suffix)
+            tmp_name = tmp.name
+            tmp.close()
+            f.save(tmp_name)
+            if suffix in ('.png', '.jpg', '.jpeg', '.bmp', '.tiff'):
+                try:
+                    text = extract_text_from_image(tmp_name)
+                except TesseractNotFoundError:
+                    return render_template(
+                        'index.html',
+                        supported_langs=SUPPORTED_LANGS,
+                        summary=None,
+                        translations="Ошибка: Tesseract OCR не установлен. Пожалуйста, установите tesseract и перезапустите приложение." 
+                    ), 500
+            else:
                 text = extract_text_from_file(tmp_name)
-            except Exception as e:
-                os.unlink(tmp_name)
-                return render_template(
-                    'index.html',
-                    supported_langs=SUPPORTED_LANGS,
-                    summary=summary,
-                    translations=f"Ошибка при чтении файла: {e}"
-                ), 400
-    # Для больших текстов мы уже могли получить summary через process_large_file
-    # - в этом случае сразу рендерим
-    if summary is not None:
-        if tmp_name:
-            try:
-                os.unlink(tmp_name)
-            except:
-                pass
-            return render_template(
-                'index.html',
-                supported_langs=SUPPORTED_LANGS,
-                summary=summary,
-                translations="translations"
-            )
         
-    # Для небольших текстов - детект по предложениям 
-    if text:
-        raw = re.split(r'(?<=[.!?])\s+|\r?\n+', text)
-        sentences = [s.strip() for s in raw if s.strip()]
-        counts = {}
-        THRESHOLD = 100
-        for sent in sentences:
-            try:
-                if len(sent) < THRESHOLD:
-                    lang = detect(sent)
+        # Очень большой кусок текста - чанк-обработка нейросетью
+        if len(text) > 500_000:
+            summary = process_large_file(tmp_name or '', chunk_size=50_000)
+            translations = ''
+        else:
+            # Разбиваем на предложения
+            sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+|\r?\n+', text) if s.strip()]
+            counts = {}
+            for sent in sentences:
+                if len(sent) < 100:
+                    try:
+                        lang = detect(sent)
+                    except:
+                        lang = detect_language_from_text(sent)
                 else:
                     lang = detect_language_from_text(sent)
-            except:
-                lang = detect_language_from_text(sent)
-            counts[lang] = counts.get(lang, 0) + 1
-        total   = sum(counts.values()) or 1
-        summary = {lang: cnt/total*100 for lang, cnt in counts.items()}
+                counts[lang] = counts.get(lang, 0) + 1
+            total = sum(counts.values()) or 1
+            summary = {lang: cnt/total*100 for lang, cnt in counts.items()}
 
-        # Перевод всего текста для выбранных языков
-        targets = request.form.getlist('targets') or SUPPORTED_LANGS
-        for tgt in targets:
-            translations += f"--- {tgt} ---\n"
-            for sent in sentences:
-                try:
-                    tr = GoogleTranslator(source='auto', target=tgt).translate(sent)
-                except Exception as e:
-                    tr = f"Ошибка перевода: {e}"
-                translations += tr + "\n"
-            translations += "\n"
+            # Переводим каждое предложение
+            translations = ''
+            targets = request.form.getlist('targets') or SUPPORTED_LANGS
+            for tgt in targets:
+                translations += f"--- {tgt} ---\n"
+                for sent in sentences:
+                    try:
+                        translations += GoogleTranslator(source='auto', target=tgt).translate(sent) + "\n"
+                    except Exception as e:
+                        translations += f"Ошибка перевода: {e}\n"
+                translations += "\n"
 
-        # Чистка
-        if tmp_name:
-            try:
-                os.unlink(tmp_name)
-            except OSError:
-                pass
-
-    return render_template(
-        'index.html',
-        supported_langs=SUPPORTED_LANGS,
-        summary=summary,
-        translations=translations
-    )
+        return render_template('index.html',
+                               supported_langs=SUPPORTED_LANGS,
+                               summary=summary,
+                               translations=translations)
+    finally:
+        if tmp_name and os.path.exists(tmp_name):
+            os.unlink(tmp_name)
 
 if __name__ == '__main__':
-    app.run(debug=True, host='0.0.0.0', port=5000, use_reloader=False)
+    app.run()
