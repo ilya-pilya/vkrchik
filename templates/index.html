@@ -42,7 +42,69 @@
 
     <h2>Перевод текста</h2>
     <textarea readonly rows="10">{{ translations }}</textarea>
+    <div style="margin-top:1em;">
+      <label for="download-format">Скачать как:</label>
+      <select id="download-format">
+        <option value="txt">Plain Text (.txt)</option>
+        <option value="md">Markdown (.md)</option>
+        <option value="docx">Word (.docx)</option>
+      </select>
+      <button id="download-btn">Скачать</button>
+    </div>
   </div>
   {% endif %}
 </body>
 </html>
+<script>
+  document.getElementById('download-btn').addEventListener('click', () => {
+    // 1) соберём текст для сохранения
+    const summaryLis = document.querySelectorAll('.result ul li');
+    let text = 'Распределение языков:\n';
+    summaryLis.forEach(li => {
+      text += '- ' + li.textContent + '\n';
+    });
+    text += '\nПеревод:\n';
+    text += document.querySelector('.result textarea').value;
+  
+    // 2) определяем формат
+    const fmt = document.getElementById('download-format').value;
+    let blob, filename;
+    if (fmt === 'txt') {
+      blob = new Blob([text], {type: 'text/plain;charset=utf-8'});
+      filename = 'result.txt';
+    } else if (fmt === 'md') {
+      // Markdown: те же данные, но можно добавить заголовки
+      let md = '## Распределение языков\n';
+      summaryLis.forEach(li => {
+        md += '* ' + li.textContent + '\n';
+      });
+      md += '\n## Перевод\n```\n' + document.querySelector('.result textarea').value + '\n```';
+      blob = new Blob([md], {type: 'text/markdown;charset=utf-8'});
+      filename = 'result.md';
+    } else if (fmt === 'docx') {
+      // Для docx возьмём простую библиотеку: оформив HTML и конвертируя через Blob
+      // Откровенно: полноценный DOCX на клиенте -- сложно, можно отдать HTML в .doc
+      const html = `
+        <html xmlns:o="urn:schemas-microsoft-com:office:office" 
+              xmlns:w="urn:schemas-microsoft-com:office:word" 
+              xmlns="http://www.w3.org/TR/REC-html40">
+        <head><meta charset="utf-8"></head><body>
+        <h2>Распределение языков</h2><ul>
+        ${Array.from(summaryLis).map(li => `<li>${li.textContent}</li>`).join('')}
+        </ul>
+        <h2>Перевод</h2>
+        <pre>${document.querySelector('.result textarea').value}</pre>
+        </body></html>`;
+      blob = new Blob([html], {type: 'application/msword'});
+      filename = 'result.doc';
+    }
+  
+    // 3) триггерим скачивание
+    const link = document.createElement('a');
+    link.href = URL.createObjectURL(blob);
+    link.download = filename;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  });
+  </script>
