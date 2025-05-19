@@ -2,6 +2,7 @@ import os, re
 import numpy as np
 import fitz, joblib
 import sys 
+from langdetect import detect, DetectorFactory
 from tempfile import NamedTemporaryFile
 from docx import Document
 from deep_translator import GoogleTranslator
@@ -12,6 +13,7 @@ from nltk.tokenize import WordPunctTokenizer
 from nltk.corpus import stopwords
 from nltk.stem import SnowballStemmer
 
+DetectorFactory.seed = 0
 LABEL_TO_ISO = {
     'ru': 'ru',
     'de': 'de',
@@ -64,16 +66,11 @@ LANG_MAP_NLTK = {
 STOPWORDS_MAP = {lbl:set(stopwords.words(lang)) for lbl,lang in LANG_MAP_NLTK.items()}
 STEMMER_MAP   = {lbl:SnowballStemmer(lang) for lbl,lang in LANG_MAP_NLTK.items() if lang in SnowballStemmer.languages}
 
-def preprocess_text(text, label):
+def preprocess_text(text, label=None):
     if not isinstance(text, str):
         return ""
-    text = re.sub(r'[^\w\s]', ' ', text).lower()
-    tokens = tokenizer.tokenize(text)
-    sw = STOPWORDS_MAP.get(label, STOPWORDS_MAP.get('en', set()))
-    tokens = [t for t in tokens if t not in sw]
-    stemmer = STEMMER_MAP.get(label)
-    if stemmer:
-        tokens = [stemmer.stem(t) for t in tokens]
+    cleaned = re.sub(r'[^\w\s]', ' ', text).lower()
+    tokens = tokenizer.tokenize(cleaned)
     return " ".join(tokens)
 
 SUPPORTED_LANGS = list(y_encoder.classes_)
@@ -120,7 +117,7 @@ def detect_language_from_text(text: str) -> str:
     if not text.strip():
         raise ValueError("Текст пустой или не извлечён.")
     # 1) предобработка
-    proc = preprocess_text(text, label='en')  
+    proc = preprocess_text(text)  
     # 2) векторизация + редукция
     X_tfidf = tfidf.transform([proc])
     X_red   = svd.transform(X_tfidf)
@@ -168,46 +165,109 @@ def index():
 
 @app.route('/process', methods=['POST'])
 def process_file():
-    f = request.files.get('file')
-    if not f:
-        return render_template(
-            'index.html',
-            supported_langs=SUPPORTED_LANGS,
-            summary=None,
-            translations="Ошибка: файл не передан"
-        ), 400
-
-    suffix = os.path.splitext(secure_filename(f.filename))[1]
-    tmp = NamedTemporaryFile(delete=False, suffix=suffix)
-    tmp_name = tmp.name
-    tmp.close()
-    f.save(tmp_name)
+    # Инициализируем
+    summary = None
+    translations = ''
+    tmp_name = None
+    text = None
     
-    ext = suffix.lower()
-    if ext == '.txt' and os.path.getsize(tmp_name) > 5_000_000:
-        summary = process_large_file(tmp_name, chunk_size=50_000)
-        translations = ''
+    # Если пользователь вставил текст вручную
+    text_input = request.form.get('text_input', '').strip()
+    if text_input:
+        # При очень большом тексте - временный файл + process_large_file
+        if len(text_input) > 500_000:
+            tmp = NamedTemporaryFile(delete=False, suffix=suffix)
+            tmp_name = tmp.name
+            tmp.write(text_input.encode('utf-8'))
+            tmp.close()
+            summary = process_large_file(tmp_name, chunk_size=50_000)
+        else:
+            text = text_input
+
     else:
-        text = extract_text_from_file(tmp_name)
-        sentences = [s.strip() for s in re.split(r'(?<=[.!?])\s+', text) if s.strip()]
-        counts = {}
-        for sent in sentences:
-            lang = detect_language_from_text(sent)
-            counts[lang] = counts.get(lang, 0) + 1
-        total   = len(sentences) or 1
-        summary = {lang: cnt/total*100 for lang, cnt in counts.items()}
-        targets = request.form.getlist('targets') or SUPPORTED_LANGS
-        translations = ""
-        for tgt in targets:
+        # Иначе пытаемся загрузить файл
+        f = request.files.get('file')
+        if not f:
+            return render_template(
+                'index.html',
+                supported_langs=SUPPORTED_LANGS,
+                summary=None,
+                translations="Ошибка: ни текст, ни файл не переданы"
+            ), 400
+
+        suffix = os.path.splitext(secure_filename(f.filename))[1].lower()
+        tmp = NamedTemporaryFile(delete=False, suffix=suffix)
+        tmp_name = tmp.name
+        tmp.close()
+        f.save(tmp_name)
+
+        # Если это большой .txt - chunk-процессинг
+        if suffix == '.txt' and os.path.getsize(tmp_name) > 5_000_000:
+            summary = process_large_file(tmp_name, chunk_size=50_000)
+        else:
+            # Обычное извлечение текста
             try:
-                tr = GoogleTranslator(source='auto', target=tgt).translate(text)
+                text = extract_text_from_file(tmp_name)
             except Exception as e:
-                tr = f"Ошибка перевода: {e}"
-            translations += f"--- {tgt} ---\n{tr}\n\n"
-        try:
-            os.unlink(tmp_name)
-        except OSError:
-            pass
+                os.unlink(tmp_name)
+                return render_template(
+                    'index.html',
+                    supported_langs=SUPPORTED_LANGS,
+                    summary=None,
+                    translations=f"Ошибка при чтении файла: {e}"
+                ), 400
+    
+    # Если мы уже получили summary через process_large_file - пропускаем детект+перевод
+    if 'summary' is not None:
+        # Удаляем файл и выводим
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except:
+                pass
+            return render_template(
+                'index.html',
+                supported_langs=SUPPORTED_LANGS,
+                summary=summary,
+                translations=""
+            )
+
+        # Для небольших текстов - детект по предложениям 
+        raw = re.split(r'(?<=[.!?])\s+|\r?\n+', text)
+        sentences = [s.strip() for s in raw if s.strip()]
+        counts = {}
+        THRESHOLD = 100
+        for sent in sentences:
+            if len(sent) < THRESHOLD:
+                try:
+                    lang = detect(sent)
+                except:
+                    lang = detect_language_from_text(sent)
+            else:
+                lang = detect_language_from_text(sent)
+            counts[lang] = counts.get(lang, 0) + 1
+
+        total   = sum(counts.values()) or 1
+        summary = {lang: cnt/total*100 for lang, cnt in counts.items()}
+
+        # Перевод всего текста для выбранных языков
+        targets = request.form.getlist('targets') or SUPPORTED_LANGS
+        for tgt in targets:
+            translations += f"--- {tgt} ---\n"
+            for sent in sentences:
+                try:
+                    tr = GoogleTranslator(source='auto', target=tgt).translate(sent)
+                except Exception as e:
+                    tr = f"Ошибка перевода: {e}"
+                translations += tr + "\n"
+            translations += "\n"
+
+        # Чистка
+        if tmp_name:
+            try:
+                os.unlink(tmp_name)
+            except OSError:
+                pass
 
     return render_template(
         'index.html',

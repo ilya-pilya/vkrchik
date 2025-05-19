@@ -13,3 +13,4 @@ seaborn
 tensorflow
 tensorflow_addons
 werkzeug
+langdetect
