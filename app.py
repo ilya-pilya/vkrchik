@@ -267,6 +267,11 @@ def process_file():
                 counts[lang] = counts.get(lang, 0) + 1
             total = sum(counts.values()) or 1
             summary = {lang: cnt/total*100 for lang, cnt in counts.items()}
+            summary = {
+                lang: pct
+                for lang, pct in summary.items()
+                if lang in LABEL_TO_ISO
+            }
 
             # Переводим каждое предложение
             translations = ''
