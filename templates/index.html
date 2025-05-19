@@ -41,7 +41,9 @@
     </ul>
 
     <h2>Перевод текста</h2>
-    <textarea readonly rows="10">{{ translations }}</textarea>
+    <textarea id="translation-area" rows="10" style="width:100%; resize:vertical">
+      {{ translations }}
+    </textarea>
     <div style="margin-top:1em;">
       <label for="download-format">Скачать как:</label>
       <select id="download-format">
@@ -64,7 +66,7 @@
       text += '- ' + li.textContent + '\n';
     });
     text += '\nПеревод:\n';
-    text += document.querySelector('.result textarea').value;
+    text += document.getElementById('translation-area').value;
   
     // 2) определяем формат
     const fmt = document.getElementById('download-format').value;
@@ -78,7 +80,7 @@
       summaryLis.forEach(li => {
         md += '* ' + li.textContent + '\n';
       });
-      md += '\n## Перевод\n```\n' + document.querySelector('.result textarea').value + '\n```';
+      md += '\n## Перевод\n```\n' + document.querySelector('translation-area').value + '\n```';
       blob = new Blob([md], {type: 'text/markdown;charset=utf-8'});
       filename = 'result.md';
     } else if (fmt === 'docx') {
@@ -93,7 +95,7 @@
         ${Array.from(summaryLis).map(li => `<li>${li.textContent}</li>`).join('')}
         </ul>
         <h2>Перевод</h2>
-        <pre>${document.querySelector('.result textarea').value}</pre>
+        <pre>${document.querySelector('translation-area').value}</pre>
         </body></html>`;
       blob = new Blob([html], {type: 'application/msword'});
       filename = 'result.doc';
