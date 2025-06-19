@@ -12,8 +12,14 @@
 <body>
   <h1>Language Detector & Translator</h1>
 
+  <style>
+    .input-error {
+      border: 2px solid red;
+      background-color: #ffeaea;
+    }
+  </style>
   <!-- Обработка текста -->
-  <form method="post" action="/process" enctype="multipart/form-data">
+  <form id="uploadForm" method="post" action="/process" enctype="multipart/form-data">
     <p><label for="text_input">Вставьте текст:</label></p>
     <textarea id="text_input" name="text_input" rows="6" placeholder="Например: Привет, мир…">{{ request.form.text_input or '' }}</textarea>
     
@@ -22,13 +28,13 @@
     <!-- Загрузка файла -->
     <p>
       <label for="file">Выберите файл:</label>
-      <input id="file" type="file" name="file" accept=".txt,.pdf,.docx,image/*" required>
+      <input id="file" type="file" name="file" accept=".txt,.pdf,.docx,image/*">
     </p>
 
     <p>
       <label>Перевести на:</label><br>
       {% for code in supported_langs %}
-        <input type="checkbox" name="targets" value="{{code}}" checked> {{code}}
+        <input type="checkbox" name="targets" value="{{ code }}" checked> {{ lang_names[code] }}
       {% endfor %}
     </p>
 
@@ -40,7 +46,7 @@
   <form method="post" action="/upload_model" enctype="multipart/form-data">
     <p>
       <label for="model_file">Выберите файл модели:</label>
-      <input type="file" name="model_file" id="model_file" accept=".h5,.joblib" required>
+      <input type="file" name="model_file" id="model_file" accept=".h5,.joblib">
     </p>
     <button type="submit">Загрузить модель</button>
   </form>
@@ -70,6 +76,30 @@
     </div>
   </div>
   {% endif %}
+
+  <!-- Проверка на пустой запрос-->
+  <script>
+    document.getElementById("uploadForm").addEventListener("submit", function (e) {
+      const textArea = document.getElementById("text_input");
+      const fileInput = document.getElementById("file");
+
+      const text = textArea.value.trim();
+      const fileSelected = fileInput.files.length > 0;
+
+      textArea.classList.remove("input-error");
+      fileInput.classList.remove("input-error");
+
+      if (!text && !fileSelected) {
+        e.preventDefault();
+        alert("Пожалуйста, введите текст или выберите файл.");
+
+        textArea.classList.add("input-error");
+        fileInput.classList.add("input-error");
+
+        textArea.focus();
+      }
+    });
+  </script>
 
   <script>
     document.getElementById('download-btn').addEventListener('click', () => {

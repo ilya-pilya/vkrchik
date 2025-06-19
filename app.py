@@ -2,6 +2,7 @@ import os, re, fitz, joblib
 import numpy as np
 import sys 
 import pytesseract
+import mimetypes
 from langdetect import detect, DetectorFactory
 from tempfile import NamedTemporaryFile
 from docx import Document
@@ -70,6 +71,18 @@ LANG_MAP_NLTK = {
     'en':'english', 'pt':'portuguese',
     'fr':'french', 'it':'italian',
     'es':'spanish'
+}
+
+LANG_NAME_RU = {
+    'en': 'Английский',
+    'de': 'Немецкий',
+    'ru': 'Русский',
+    'el': 'Греческий',
+    'tr': 'Турецкий',
+    'fr': 'Французский',
+    'es': 'Испанский',
+    'it': 'Итальянский',
+    'pt': 'Португальский'
 }
 
 STOPWORDS_MAP = {lbl:set(stopwords.words(lang)) for lbl,lang in LANG_MAP_NLTK.items()}
@@ -176,7 +189,8 @@ def index():
         supported_langs=SUPPORTED_LANGS,
         summary=None,            
         translations="",
-        models = available          
+        models = available,
+        lang_names=LANG_NAME_RU          
     )
 
 @app.route('/upload_model', methods=['POST'])
@@ -227,10 +241,18 @@ def process_file():
         else:
             f = request.files.get('file')
             if not f:
-                return render_template('index.html', supported_langs=SUPPORTED_LANGS,
+                return render_template('index.html', 
+                                       supported_langs=SUPPORTED_LANGS,
+                                       lang_names=LANG_NAME_RU,
                                        summary=None,
                                        translations="Ошибка: ни текст, ни файл не переданы"), 400
             suffix = os.path.splitext(secure_filename(f.filename))[1].lower()
+            if not suffix:
+                return render_template('index.html',
+                                       supported_langs=SUPPORTED_LANGS,
+                                       lang_names=LANG_NAME_RU,
+                                       summary=None,
+                                       translations="Ошибка: не удалось определить расширение файла. Убедитесь, что у файла есть расширение (.txt, .pdf, .docx)."), 400
             tmp = NamedTemporaryFile(delete=False, suffix=suffix)
             tmp_name = tmp.name
             tmp.close()
@@ -242,6 +264,7 @@ def process_file():
                     return render_template(
                         'index.html',
                         supported_langs=SUPPORTED_LANGS,
+                        lang_names=LANG_NAME_RU,
                         summary=None,
                         translations="Ошибка: Tesseract OCR не установлен. Пожалуйста, установите tesseract и перезапустите приложение." 
                     ), 500
@@ -273,11 +296,16 @@ def process_file():
                 if lang in LABEL_TO_ISO
             }
 
+            summary_readable = {
+                LANG_NAME_RU.get(lang, lang): round(pct, 2)
+                for lang, pct in summary.items()
+            }
+
             # Переводим каждое предложение
             translations = ''
             targets = request.form.getlist('targets') or SUPPORTED_LANGS
             for tgt in targets:
-                translations += f"--- {tgt} ---\n"
+                translations += f"--- {LANG_NAME_RU.get(tgt, tgt)} ---\n"
                 for sent in sentences:
                     try:
                         translations += GoogleTranslator(source='auto', target=tgt).translate(sent) + "\n"
@@ -287,8 +315,9 @@ def process_file():
 
         return render_template('index.html',
                                supported_langs=SUPPORTED_LANGS,
-                               summary=summary,
-                               translations=translations)
+                               summary=summary_readable,
+                               translations=translations,
+                               lang_names=LANG_NAME_RU)
     finally:
         if tmp_name and os.path.exists(tmp_name):
             os.unlink(tmp_name)
